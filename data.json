@@ -1,0 +1,16 @@
+{
+    "walletBalance": 1200,
+    "partners": [
+      {
+        "id": "partner_id_1",
+        "name": "Partner One",
+        "email": "one@example.com",
+        "isActive": true,
+        "walletBalance": 500
+      }
+    ],
+    "totalOrders": 10,
+    "completedOrders": 6,
+    "pendingOrders": 4
+  }
+  

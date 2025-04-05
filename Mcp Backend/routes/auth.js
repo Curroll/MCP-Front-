@@ -1,136 +1,129 @@
 import express from 'express';
-import bcrypt from 'bcryptjs';
+import bcrypt from 'bcrypt';
 import jwt from 'jsonwebtoken';
 import User from '../models/User.js';
+import { generateToken } from '../utils/generateToken.js';
+
+// Safe logging utility
+const safeLog = {
+  user: (user) => {
+    if (!user) return 'null';
+    return {
+      _id: user._id,
+      name: user.name,
+      email: user.email,
+      role: user.role,
+      isActive: user.isActive,
+      // Explicitly exclude sensitive fields:
+      // password: '[REDACTED]',
+      // passwordChangedAt: '[REDACTED]',
+      // passwordResetToken: '[REDACTED]',
+      // passwordResetExpires: '[REDACTED]'
+    };
+  },
+  request: (req) => {
+    return {
+      method: req.method,
+      path: req.path,
+      headers: req.headers,
+      body: {
+        ...req.body,
+        // Redact sensitive fields from request body
+        password: req.body.password ? '[REDACTED]' : undefined
+      }
+    };
+  }
+};
 
 const router = express.Router();
+console.log('📦 Auth routes loaded');
 
-// Register User
+// ============================
+// 📌 Register Route
+// ============================
 router.post('/register', async (req, res) => {
   try {
-    // 1. Validate required fields
     const { name, email, password, role, mcpId } = req.body;
+
     if (!name || !email || !password || !role) {
-      return res.status(400).json({ 
-        success: false,
-        error: 'All required fields must be provided' 
-      });
+      return res.status(400).json({ message: 'All fields are required' });
     }
 
-    // 2. Validate partner-MCP relationship
-    if (role === 'partner' && !mcpId) {
-      return res.status(400).json({
-        success: false,
-        error: 'Partners must be linked to an MCP'
-      });
-    }
-
-    // 3. Check for existing user
     const existingUser = await User.findOne({ email });
     if (existingUser) {
-      return res.status(409).json({
-        success: false,
-        error: 'Email already registered'
-      });
+      return res.status(400).json({ message: 'User already exists' });
     }
 
-    // 4. Create new user (password will be hashed by pre-save hook)
-    const newUser = new User({
+    const user = await User.create({
       name,
       email,
-      password,
+      password: password.toString(),
       role,
-      mcpId: role === 'partner' ? mcpId : undefined,
-      walletBalance: 0
+      ...(role === 'partner' && { mcpId }),
     });
 
-    // 5. Save user (triggers schema validations and pre-save hooks)
-    await newUser.save();
+    console.log("🆔 Registered User ID:", user._id);
 
-    // 6. Generate JWT token
-    const token = jwt.sign(
-      { id: newUser._id, role: newUser.role },
-      process.env.JWT_SECRET,
-      { expiresIn: '7d' }
-    );
+    const token = generateToken(user);
 
-    // 7. Return success response (excluding sensitive data)
     res.status(201).json({
-      success: true,
-      user: {
-        id: newUser._id,
-        name: newUser.name,
-        email: newUser.email,
-        role: newUser.role,
-        walletBalance: newUser.walletBalance
-      },
-      token
+      _id: user._id,
+      name: user.name,
+      email: user.email,
+      role: user.role,
+      token,
     });
 
   } catch (error) {
-    console.error('Registration error:', error);
-    
-    // Handle specific error types
-    if (error.name === 'ValidationError') {
-      return res.status(400).json({
-        success: false,
-        error: error.message
-      });
-    }
-    
-    if (error.message.includes('valid MCP')) {
-      return res.status(400).json({
-        success: false,
-        error: error.message
-      });
-    }
-
-    res.status(500).json({ 
-      success: false,
-      error: 'Registration failed',
-      details: process.env.NODE_ENV === 'development' ? error.message : undefined
-    });
+    console.error('❌ Register Error:', error);
+    res.status(500).json({ message: 'Server Error', error: error.message });
   }
 });
 
-// Login User
+// ============================
+// 🔐 Login Route
+// ============================
 router.post('/login', async (req, res) => {
   try {
-    // 1. Validate input
     const { email, password } = req.body;
+
+    console.log("📩 Request:", safeLog.request(req));
+
     if (!email || !password) {
-      return res.status(400).json({ 
+      return res.status(400).json({
         success: false,
-        error: 'Email and password are required' 
+        error: 'Email and password are required',
       });
     }
 
-    // 2. Find user (including password which is normally excluded)
+    // ✅ Variable declared here before any usage
     const user = await User.findOne({ email }).select('+password');
+
     if (!user) {
       return res.status(401).json({
         success: false,
-        error: 'Invalid credentials'
+        error: 'Invalid credentials',
       });
     }
 
-    // 3. Verify password
-    const isMatch = await bcrypt.compare(password, user.password);
+    console.log("👤 User fetched from DB:", safeLog.user(user));
+    
+    const isMatch = await bcrypt.compare(password.toString(), user.password);
+    console.log("✅ Authentication attempt for:", user.email, "Result:", isMatch ? "Success" : "Failure");
+
     if (!isMatch) {
       return res.status(401).json({
         success: false,
-        error: 'Invalid credentials'
+        error: 'Invalid credentials',
       });
     }
 
-    // 4. Generate JWT token
     const token = jwt.sign(
       { id: user._id, role: user.role },
       process.env.JWT_SECRET,
       { expiresIn: '7d' }
     );
 
-    // 5. Return success response
     res.json({
       success: true,
       user: {
@@ -138,19 +131,20 @@ router.post('/login', async (req, res) => {
         name: user.name,
         email: user.email,
         role: user.role,
-        walletBalance: user.walletBalance
+        walletBalance: user.walletBalance,
       },
-      token
+      token,
     });
 
   } catch (error) {
-    console.error('Login error:', error);
-    res.status(500).json({ 
+    console.error('❌ Login error:', error.message);
+    res.status(500).json({
       success: false,
       error: 'Login failed',
-      details: process.env.NODE_ENV === 'development' ? error.message : undefined
+      details: error.message,
     });
   }
 });
+
 
 export default router;

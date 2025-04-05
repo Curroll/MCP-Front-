@@ -6,7 +6,7 @@ import { auth } from '../middleware/auth.js';
 const router = express.Router();
 
 // Transfer funds
-router.post('/transfer', auth, async (req, res) => {
+router.post('/transfer', auth, authorizeRoles('mcp', 'partner'), async (req, res) => {
   try {
     const { toId, amount } = req.body;
 
